@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:audioplayers/audioplayers.dart';
 import '../models/learner_profile.dart';
 import '../models/voice_profile.dart';
 import '../models/story_model.dart';
@@ -12,10 +13,12 @@ class AppState extends ChangeNotifier {
   int _currentTabIndex = 0;
 
   // Audio Player State
+  final AudioPlayer _audioPlayer = AudioPlayer();
   bool _isPlaying = false;
-  double _audioProgress = 0.28;
+  double _audioProgress = 0.0;
   double _playbackSpeed = 1.0;
   bool _useParentVoice = true;
+  Duration _audioDuration = const Duration(seconds: 5);
 
   // Search filter
   String _searchQuery = '';
@@ -23,6 +26,29 @@ class AppState extends ChangeNotifier {
 
   AppState() {
     _activeStory = StoryService.allStories.first;
+    _initAudio();
+  }
+
+  void _initAudio() {
+    _audioPlayer.onPositionChanged.listen((pos) {
+      if (_audioDuration.inMilliseconds > 0) {
+        _audioProgress = (pos.inMilliseconds / _audioDuration.inMilliseconds).clamp(0.0, 1.0);
+        notifyListeners();
+      }
+    });
+
+    _audioPlayer.onDurationChanged.listen((dur) {
+      _audioDuration = dur;
+      notifyListeners();
+    });
+
+    _audioPlayer.onPlayerStateChanged.listen((state) {
+      final playing = state == PlayerState.playing;
+      if (_isPlaying != playing) {
+        _isPlaying = playing;
+        notifyListeners();
+      }
+    });
   }
 
   // Getters
@@ -50,21 +76,38 @@ class AppState extends ChangeNotifier {
     _activeStory = story;
     _isPlaying = false;
     _audioProgress = 0.0;
+    _audioPlayer.stop();
     notifyListeners();
   }
 
   // Audio Controls
-  void togglePlayPause() {
-    _isPlaying = !_isPlaying;
-    notifyListeners();
+  Future<void> togglePlayPause() async {
+    try {
+      if (_isPlaying) {
+        await _audioPlayer.pause();
+      } else {
+        await _audioPlayer.play(AssetSource('audio/cloned_sample.wav'));
+        await _audioPlayer.setPlaybackRate(_playbackSpeed);
+      }
+    } catch (e) {
+      debugPrint('Audio playback error: $e');
+      _isPlaying = !_isPlaying;
+      notifyListeners();
+    }
   }
 
-  void setAudioProgress(double val) {
+  Future<void> setAudioProgress(double val) async {
     _audioProgress = val.clamp(0.0, 1.0);
     notifyListeners();
+    if (_audioDuration.inMilliseconds > 0) {
+      final targetMs = (val * _audioDuration.inMilliseconds).toInt();
+      try {
+        await _audioPlayer.seek(Duration(milliseconds: targetMs));
+      } catch (_) {}
+    }
   }
 
-  void cyclePlaybackSpeed() {
+  Future<void> cyclePlaybackSpeed() async {
     if (_playbackSpeed == 1.0) {
       _playbackSpeed = 1.25;
     } else if (_playbackSpeed == 1.25) {
@@ -72,6 +115,9 @@ class AppState extends ChangeNotifier {
     } else {
       _playbackSpeed = 1.0;
     }
+    try {
+      await _audioPlayer.setPlaybackRate(_playbackSpeed);
+    } catch (_) {}
     notifyListeners();
   }
 
@@ -123,6 +169,7 @@ class AppState extends ChangeNotifier {
       isAIActive: false,
     );
     _useParentVoice = false;
+    _audioPlayer.stop();
     notifyListeners();
   }
 
@@ -166,5 +213,11 @@ class AppState extends ChangeNotifier {
   void setSelectedCategory(String cat) {
     _selectedCategory = cat;
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _audioPlayer.dispose();
+    super.dispose();
   }
 }
