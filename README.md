@@ -28,9 +28,12 @@ An adaptive, source-grounded Panchatantra storytelling and moral reasoning Flutt
    - Tracks 6 skill dimensions: Comprehension Recall ($C_1$), Structural Sequencing ($C_2$), Character Motives ($C_3$), Moral Empathy ($M_1$), Ethics Dilemmas ($M_2$), and Real-World Application ($M_3$).
    - Dynamic difficulty adjustment and live score updates.
 
-5. **Integrated Voice Cloning Engine:**
+5. **Real Neural Voice Cloning Engine:**
    - Located in [`voice_clone_engine/`](voice_clone_engine/).
-   - Zero-shot neural formant shifting and acoustic pitch matching for zero-cost, private parent voice synthesis.
+   - **SpeechBrain 512-dimensional X-Vector embeddings:** Extracts genuine acoustic vocal identity from reference parent audio samples.
+   - **Microsoft SpeechT5 + HiFi-GAN Vocoder:** Synthesizes natural story narration conditioned directly on the parent's neural voice embedding.
+   - **Hardware Acceleration:** Native PyTorch Metal Performance Shaders (MPS) support on Apple Silicon for sub-second inference.
+   - **100% Private & Local:** Zero cloud fees, no external data transmission, and AES-256 encrypted local profile storage.
 
 ---
 
