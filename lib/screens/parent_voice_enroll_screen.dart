@@ -30,6 +30,9 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
   RecordedAudio? _recordedAudio;
   bool _isPlayingUserRecording = false;
 
+  List<InputDevice> _availableDevices = [];
+  InputDevice? _selectedDevice;
+
   bool _autoDelete = true;
   bool _isCloning = false;
   int _cloningStage = 0;
@@ -42,6 +45,7 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
   @override
   void initState() {
     super.initState();
+    _loadInputDevices();
     _userVoicePlayer.onPlayerStateChanged.listen((state) {
       if (mounted) {
         setState(() {
@@ -49,6 +53,17 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
         });
       }
     });
+  }
+
+  Future<void> _loadInputDevices() async {
+    final devices = await _recorderHelper.listInputDevices();
+    final preferred = await _recorderHelper.getDefaultPreferredInputDevice();
+    if (mounted) {
+      setState(() {
+        _availableDevices = devices;
+        _selectedDevice = preferred ?? (devices.isNotEmpty ? devices.first : null);
+      });
+    }
   }
 
   Future<void> _startRecording() async {
@@ -91,7 +106,7 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
         _recordedAudio = null;
       });
 
-      await _recorderHelper.startRecording();
+      await _recorderHelper.startRecording(device: _selectedDevice);
 
       _recordTimer?.cancel();
       _recordTimer = Timer.periodic(const Duration(seconds: 1), (t) {
@@ -146,8 +161,17 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
       if (hasAudio) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('🎙️ Voice recorded (${_formatDuration(_recordDuration)}, ${result.bytes!.length} bytes)! Tap Play below to listen to yourself.'),
+            content: Text('🎙️ Voice recorded (${_formatDuration(_recordDuration)}, peak: ${(result.peakAmplitude * 100).toInt()}%) via ${_selectedDevice?.label ?? "Microphone"}! Tap Play to listen.'),
             backgroundColor: AppColors.headerPrimary,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      } else if (result != null && result.isSilent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('⚠️ Near-zero sound picked up by "${result.inputDeviceName ?? "Microphone"}". If earphones are plugged in, switch microphone above to "MacBook Air Microphone" and speak clearly.'),
+            backgroundColor: AppColors.danger,
+            duration: const Duration(seconds: 6),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -186,6 +210,9 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
           );
           return;
         }
+
+        // Ensure player is at 100% volume
+        await _userVoicePlayer.setVolume(1.0);
 
         final source = await createPlatformAudioSource(
           bytes: _recordedAudio!.bytes,
@@ -404,6 +431,86 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
     );
   }
 
+  Widget _buildMicSelector() {
+    if (_availableDevices.isEmpty && _selectedDevice == null) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8, bottom: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: AppColors.accentCyan.withValues(alpha: 0.5),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.accentCyanDark.withValues(alpha: 0.05),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.mic_rounded, size: 17, color: AppColors.headerPrimary),
+          const SizedBox(width: 7),
+          Text(
+            'Microphone:',
+            style: GoogleFonts.nunito(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w800,
+              color: AppColors.textMedium,
+            ),
+          ),
+          const SizedBox(width: 6),
+          if (_availableDevices.length <= 1)
+            Text(
+              _selectedDevice?.label ?? 'MacBook Air Microphone',
+              style: GoogleFonts.nunito(
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                color: AppColors.textDark,
+              ),
+            )
+          else
+            DropdownButtonHideUnderline(
+              child: DropdownButton<InputDevice>(
+                value: _selectedDevice,
+                isDense: true,
+                style: GoogleFonts.nunito(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.textDark,
+                ),
+                icon: const Icon(Icons.arrow_drop_down_rounded, size: 20, color: AppColors.headerPrimary),
+                items: _availableDevices.map((dev) {
+                  final isBuiltIn = dev.label.toLowerCase().contains('macbook') ||
+                      dev.label.toLowerCase().contains('built-in') ||
+                      dev.label.toLowerCase().contains('builtin');
+                  return DropdownMenuItem<InputDevice>(
+                    value: dev,
+                    child: Text(
+                      isBuiltIn ? '${dev.label} (Recommended)' : dev.label,
+                    ),
+                  );
+                }).toList(),
+                onChanged: (newDev) {
+                  if (newDev != null) {
+                    setState(() => _selectedDevice = newDev);
+                  }
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -541,7 +648,10 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
                             ),
                           ),
                         ),
-                        const SizedBox(height: 22),
+                        Center(
+                          child: _buildMicSelector(),
+                        ),
+                        const SizedBox(height: 14),
                         Center(
                           child: _RecordingWave(
                             active: _isRecording || _isPlayingUserRecording || _isCloning,
@@ -740,6 +850,51 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
                                     ),
                                   ],
                                 ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    const Icon(Icons.volume_up_rounded, size: 13, color: AppColors.textMedium),
+                                    const SizedBox(width: 5),
+                                    Expanded(
+                                      child: Text(
+                                        'Playing at 100% volume. (Note: Audio routes through headphones if connected)',
+                                        style: GoogleFonts.nunito(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                          color: AppColors.textMedium,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                if (_recordedAudio != null && _recordedAudio!.isSilent) ...[
+                                  const SizedBox(height: 10),
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFFEF2F2),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: const Color(0xFFFCA5A5)),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(Icons.warning_amber_rounded, color: AppColors.danger, size: 20),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            '⚠️ Near-zero sound was captured! If headphones/earphones are plugged into your Mac, please select "MacBook Air Microphone" above and record again.',
+                                            style: GoogleFonts.nunito(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w700,
+                                              color: const Color(0xFF991B1B),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                                 const SizedBox(height: 14),
                                 SizedBox(
                                   width: double.infinity,

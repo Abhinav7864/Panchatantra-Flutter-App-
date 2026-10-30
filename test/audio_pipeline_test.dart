@@ -59,5 +59,41 @@ void main() {
 
       tempFile.deleteSync();
     });
+
+    test('analyzeAndNormalizeWav identifies silent audio and boosts soft speech', () {
+      // Build a minimal RIFF WAV with silence (PCM int16 zeros)
+      final wavData = Uint8List(44 + 2000);
+      final bd = ByteData.view(wavData.buffer);
+      // 'RIFF'
+      wavData.setRange(0, 4, [0x52, 0x49, 0x46, 0x46]);
+      bd.setUint32(4, 2036, Endian.little);
+      // 'WAVE'
+      wavData.setRange(8, 12, [0x57, 0x41, 0x56, 0x45]);
+      // 'fmt '
+      wavData.setRange(12, 16, [0x66, 0x6D, 0x74, 0x20]);
+      bd.setUint32(16, 16, Endian.little);
+      bd.setUint16(20, 1, Endian.little); // PCM
+      bd.setUint16(22, 1, Endian.little); // mono
+      bd.setUint32(24, 16000, Endian.little);
+      bd.setUint32(28, 32000, Endian.little);
+      bd.setUint16(32, 2, Endian.little);
+      bd.setUint16(34, 16, Endian.little);
+      // 'data'
+      wavData.setRange(36, 40, [0x64, 0x61, 0x74, 0x61]);
+      bd.setUint32(40, 2000, Endian.little);
+
+      // 1. Pure silence
+      final silentResult = analyzeAndNormalizeWav(wavData);
+      expect(silentResult.isSilent, isTrue);
+      expect(silentResult.peakAmplitude, equals(0.0));
+
+      // 2. Soft speech (max amplitude ~0.15 = 4915)
+      for (int i = 0; i < 1000; i++) {
+        bd.setInt16(44 + i * 2, (i % 2 == 0 ? 4915 : -4915), Endian.little);
+      }
+      final softResult = analyzeAndNormalizeWav(wavData);
+      expect(softResult.isSilent, isFalse);
+      expect(softResult.peakAmplitude, closeTo(0.88, 0.01));
+    });
   });
 }

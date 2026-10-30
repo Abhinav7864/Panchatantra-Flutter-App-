@@ -106,6 +106,7 @@ class _ClonedVoicePlayerWidgetState extends State<ClonedVoicePlayerWidget>
         }
 
         if (source != null) {
+          await _audioPlayer.setVolume(1.0);
           await _audioPlayer.play(source);
         }
       }
@@ -130,6 +131,7 @@ class _ClonedVoicePlayerWidgetState extends State<ClonedVoicePlayerWidget>
       }
 
       if (source != null) {
+        await _audioPlayer.setVolume(1.0);
         await _audioPlayer.play(source);
       }
     } catch (e) {
