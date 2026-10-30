@@ -74,7 +74,9 @@ class VoiceCloneRunner {
   /// Runs the neural voice cloning model for the parent
   static Future<VoiceCloneResult> runVoiceCloning({
     required String parentName,
+    Uint8List? audioBytes,
     String? audioSamplePath,
+    String fileExt = 'wav',
   }) async {
     final stopwatch = Stopwatch()..start();
 
@@ -82,8 +84,11 @@ class VoiceCloneRunner {
     try {
       final Map<String, dynamic> reqBody = {
         'parent_name': parentName,
+        'file_ext': fileExt,
       };
-      if (audioSamplePath != null && audioSamplePath.isNotEmpty) {
+      if (audioBytes != null && audioBytes.isNotEmpty) {
+        reqBody['audio_base64'] = base64Encode(audioBytes);
+      } else if (audioSamplePath != null && audioSamplePath.isNotEmpty) {
         reqBody['audio_path'] = audioSamplePath;
       }
 
@@ -93,7 +98,7 @@ class VoiceCloneRunner {
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode(reqBody),
           )
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(seconds: 15));
 
       stopwatch.stop();
 
@@ -108,6 +113,11 @@ class VoiceCloneRunner {
             ? 'Apple Silicon MPS (Metal GPU)'
             : (profile['device'] ?? 'Neural Hardware Accelerator');
         final arch = profile['model_architecture'] ?? 'SpeechBrain X-Vector (512-dim) + SpeechT5';
+        final previewBase64 = data['preview_audio_base64'] as String?;
+        Uint8List? previewBytes;
+        if (previewBase64 != null && previewBase64.isNotEmpty) {
+          previewBytes = base64Decode(previewBase64);
+        }
 
         return VoiceCloneResult(
           success: true,
@@ -122,6 +132,7 @@ class VoiceCloneRunner {
           audioPreviewUrl: 'assets/audio/cloned_sample.wav',
           encryptionStatus: 'AES-256 Bit Private Hardware Enclave',
           latencyMs: stopwatch.elapsedMilliseconds,
+          audioBytes: previewBytes,
         );
       }
     } catch (_) {

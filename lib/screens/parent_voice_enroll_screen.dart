@@ -2,11 +2,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:audioplayers/audioplayers.dart';
 import '../theme/app_colors.dart';
 import '../providers/app_state.dart';
 import '../widgets/kid_ui.dart';
 import '../widgets/cloned_voice_player_widget.dart';
 import '../services/voice_clone_runner.dart';
+import '../services/audio_recorder_helper.dart';
 import 'child_profile_screen.dart';
 
 class ParentVoiceEnrollScreen extends StatefulWidget {
@@ -17,9 +19,14 @@ class ParentVoiceEnrollScreen extends StatefulWidget {
 }
 
 class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
+  final AudioRecorderHelper _recorderHelper = AudioRecorderHelper();
+  final AudioPlayer _userVoicePlayer = AudioPlayer();
   bool _isRecording = false;
-  double _recordProgress = 0.0;
-  Timer? _timer;
+  Duration _recordDuration = Duration.zero;
+  Timer? _recordTimer;
+  RecordedAudio? _recordedAudio;
+  bool _isPlayingUserRecording = false;
+
   bool _autoDelete = true;
   bool _isCloning = false;
   int _cloningStage = 0;
@@ -32,6 +39,13 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
   @override
   void initState() {
     super.initState();
+    _userVoicePlayer.onPlayerStateChanged.listen((state) {
+      if (mounted) {
+        setState(() {
+          _isPlayingUserRecording = (state == PlayerState.playing);
+        });
+      }
+    });
     _checkExistingVoice();
   }
 
@@ -50,28 +64,82 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
     } catch (_) {}
   }
 
-  void _startRecording() {
+  Future<void> _startRecording() async {
+    final hasPerm = await _recorderHelper.hasPermission();
+    if (!hasPerm) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('⚠️ Microphone permission required to record your voice.'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+      return;
+    }
+
+    await _userVoicePlayer.stop();
     setState(() {
       _isRecording = true;
-      _recordProgress = 0.0;
+      _recordDuration = Duration.zero;
+      _recordedAudio = null;
     });
 
-    _timer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+    await _recorderHelper.startRecording();
+
+    _recordTimer?.cancel();
+    _recordTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) return;
       setState(() {
-        _recordProgress += 0.02;
-        if (_recordProgress >= 1.0) {
-          _recordProgress = 1.0;
-          _stopRecording();
-        }
+        _recordDuration = Duration(seconds: t.tick);
       });
     });
   }
 
-  void _stopRecording() {
-    _timer?.cancel();
+  Future<void> _stopRecording() async {
+    _recordTimer?.cancel();
+    if (!_isRecording) return;
+
+    final result = await _recorderHelper.stopRecording(duration: _recordDuration);
+
     if (!mounted) return;
-    setState(() => _isRecording = false);
+    setState(() {
+      _isRecording = false;
+      _recordedAudio = result;
+    });
+
+    if (result != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('🎙️ Voice recorded (${_formatDuration(_recordDuration)})! Tap Play below to hear what you said.'),
+          backgroundColor: AppColors.headerPrimary,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _togglePlayUserRecording() async {
+    if (_recordedAudio == null) return;
+    try {
+      if (_isPlayingUserRecording) {
+        await _userVoicePlayer.pause();
+      } else {
+        if (_recordedAudio!.bytes != null && _recordedAudio!.bytes!.isNotEmpty) {
+          await _userVoicePlayer.play(BytesSource(_recordedAudio!.bytes!));
+        } else if (_recordedAudio!.path.isNotEmpty) {
+          await _userVoicePlayer.play(DeviceFileSource(_recordedAudio!.path));
+        }
+      }
+    } catch (e) {
+      debugPrint('Play user recording error: $e');
+    }
+  }
+
+  String _formatDuration(Duration d) {
+    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
   }
 
   Future<void> _executeVoiceCloning() async {
@@ -90,18 +158,20 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
     setState(() => _cloningStage = 2);
 
     // Stage 2: SpeechBrain 512-D neural X-Vector extraction
-    await Future.delayed(const Duration(milliseconds: 400));
+    await Future.delayed(const Duration(milliseconds: 350));
     if (!mounted) return;
     setState(() => _cloningStage = 3);
 
-    // Stage 3: Fundamental pitch (F0: 115.9 Hz) analysis
-    final result = await VoiceCloneRunner.runVoiceCloning(parentName: parentName);
+    // Stage 3 & 4: Neural extraction & SpeechT5 transformer synthesis
+    final result = await VoiceCloneRunner.runVoiceCloning(
+      parentName: parentName,
+      audioBytes: _recordedAudio?.bytes,
+      audioSamplePath: _recordedAudio?.path,
+    );
 
     if (!mounted) return;
     setState(() => _cloningStage = 4);
-
-    // Stage 4: SpeechT5 transformer & HiFi-GAN vocoder synthesis
-    await Future.delayed(const Duration(milliseconds: 350));
+    await Future.delayed(const Duration(milliseconds: 300));
 
     if (!mounted) return;
     setState(() {
@@ -114,7 +184,9 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
     if (result.success) {
       context.read<AppState>().enrollParentVoice(
             parentName: parentName,
-            sampleDuration: 30.0,
+            sampleDuration: _recordDuration.inSeconds > 0
+                ? _recordDuration.inSeconds.toDouble()
+                : 30.0,
           );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -128,7 +200,9 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _recordTimer?.cancel();
+    _recorderHelper.dispose();
+    _userVoicePlayer.dispose();
     _nameController.dispose();
     super.dispose();
   }
@@ -387,107 +461,246 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
                         ),
                         const SizedBox(height: 22),
                         Center(
-                          child: _RecordingWave(active: _isRecording),
+                          child: _RecordingWave(
+                            active: _isRecording || _isPlayingUserRecording || _isCloning,
+                          ),
                         ),
                         const SizedBox(height: 15),
                         Center(
-                          child: GestureDetector(
-                            onTapDown: (_) => _startRecording(),
-                            onTapUp: (_) => _stopRecording(),
-                            onTapCancel: _stopRecording,
-                            child: Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                SizedBox(
-                                  width: 90,
-                                  height: 90,
-                                  child: CircularProgressIndicator(
-                                    value: _recordProgress,
-                                    strokeWidth: 4,
-                                    backgroundColor: AppColors.chipPurple,
-                                    valueColor: const AlwaysStoppedAnimation(
-                                      AppColors.accentCyan,
-                                    ),
-                                  ),
-                                ),
-                                Container(
-                                  width: 72,
-                                  height: 72,
-                                  decoration: BoxDecoration(
-                                    gradient: _isRecording
-                                        ? AppColors.readingGradient
-                                        : AppColors.headerGradient,
-                                    shape: BoxShape.circle,
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: AppColors.headerPrimary
-                                            .withValues(alpha: 0.28),
-                                        blurRadius: 16,
-                                        offset: const Offset(0, 6),
+                          child: Column(
+                            children: [
+                              GestureDetector(
+                                onTap: () {
+                                  if (_isRecording) {
+                                    _stopRecording();
+                                  } else {
+                                    _startRecording();
+                                  }
+                                },
+                                child: Stack(
+                                  alignment: Alignment.center,
+                                  children: [
+                                    if (_isRecording)
+                                      Container(
+                                        width: 90,
+                                        height: 90,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: AppColors.danger.withValues(alpha: 0.15),
+                                        ),
                                       ),
-                                    ],
-                                  ),
-                                  child: Icon(
-                                    _isRecording
-                                        ? Icons.mic_rounded
-                                        : Icons.mic_none_rounded,
-                                    color: Colors.white,
-                                    size: 31,
+                                    Container(
+                                      width: 76,
+                                      height: 76,
+                                      decoration: BoxDecoration(
+                                        gradient: _isRecording
+                                            ? const LinearGradient(
+                                                colors: [Color(0xFFE53935), Color(0xFFD32F2F)],
+                                              )
+                                            : AppColors.headerGradient,
+                                        shape: BoxShape.circle,
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: (_isRecording ? AppColors.danger : AppColors.headerPrimary)
+                                                .withValues(alpha: 0.32),
+                                            blurRadius: 18,
+                                            offset: const Offset(0, 6),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Icon(
+                                        _isRecording ? Icons.stop_rounded : Icons.mic_rounded,
+                                        color: Colors.white,
+                                        size: 34,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Text(
+                                _isRecording
+                                    ? 'Recording... ${_formatDuration(_recordDuration)} (Tap to Stop)'
+                                    : (_recordedAudio != null
+                                        ? 'Sample captured (${_formatDuration(_recordDuration)})! Listen below.'
+                                        : 'Tap mic to record your voice'),
+                                style: GoogleFonts.nunito(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 13,
+                                  color: _isRecording ? AppColors.danger : AppColors.textMedium,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+
+                        // USER RAW RECORDING PLAYBACK CARD
+                        if (_recordedAudio != null && !_isCloning) ...[
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: AppColors.accentCyan.withValues(alpha: 0.5),
+                                width: 1.5,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppColors.accentCyanDark.withValues(alpha: 0.08),
+                                  blurRadius: 16,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: AppColors.chipBlue,
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          const Icon(Icons.headphones_rounded, size: 14, color: AppColors.accentCyanDark),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            'HEAR YOUR RAW VOICE SAMPLE',
+                                            style: GoogleFonts.nunito(
+                                              fontSize: 9.5,
+                                              fontWeight: FontWeight.w900,
+                                              letterSpacing: 0.6,
+                                              color: AppColors.accentCyanDark,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    Text(
+                                      _formatDuration(_recordDuration),
+                                      style: GoogleFonts.nunito(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w800,
+                                        color: AppColors.textMedium,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    GestureDetector(
+                                      onTap: _togglePlayUserRecording,
+                                      child: Container(
+                                        width: 48,
+                                        height: 48,
+                                        decoration: BoxDecoration(
+                                          gradient: _isPlayingUserRecording
+                                              ? AppColors.readingGradient
+                                              : AppColors.headerGradient,
+                                          shape: BoxShape.circle,
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: AppColors.headerPrimary.withValues(alpha: 0.25),
+                                              blurRadius: 10,
+                                              offset: const Offset(0, 4),
+                                            ),
+                                          ],
+                                        ),
+                                        child: Icon(
+                                          _isPlayingUserRecording ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                          color: Colors.white,
+                                          size: 28,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 14),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            _isPlayingUserRecording ? 'Playing your recorded sample...' : 'Tap to listen to yourself',
+                                            style: GoogleFonts.nunito(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w800,
+                                              color: AppColors.textDark,
+                                            ),
+                                          ),
+                                          Text(
+                                            'Hear how you sound before neural extraction.',
+                                            style: GoogleFonts.nunito(
+                                              fontSize: 10.5,
+                                              fontWeight: FontWeight.w600,
+                                              color: AppColors.textLight,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.refresh_rounded, color: AppColors.textMedium),
+                                      tooltip: 'Record again',
+                                      onPressed: () {
+                                        setState(() {
+                                          _recordedAudio = null;
+                                          _recordDuration = Duration.zero;
+                                        });
+                                      },
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 14),
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 48,
+                                  child: ElevatedButton.icon(
+                                    onPressed: _isCloning ? null : _executeVoiceCloning,
+                                    icon: const Icon(Icons.auto_awesome_rounded, size: 19),
+                                    label: Text(
+                                      _isEnrolled ? 'Re-clone with this sample' : 'Clone My Voice Now ✨',
+                                      style: GoogleFonts.nunito(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: AppColors.headerPrimary,
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                      elevation: 0,
+                                    ),
                                   ),
                                 ),
                               ],
                             ),
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        Center(
-                          child: Text(
-                            _isRecording
-                                ? 'Listening... ${(_recordProgress * 100).toInt()}%'
-                                : (_recordProgress > 0
-                                    ? 'Sample captured! Ready to clone.'
-                                    : 'Press and hold to record'),
-                            style: GoogleFonts.nunito(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
-                              color: _isRecording
-                                  ? AppColors.cardReading
-                                  : AppColors.textMedium,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-
-                        SizedBox(
-                          width: double.infinity,
-                          height: 48,
-                          child: ElevatedButton.icon(
-                            onPressed: _isCloning ? null : _executeVoiceCloning,
-                            icon: _isCloning
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : const Icon(Icons.auto_awesome_rounded, size: 19),
-                            label: Text(
-                              _isCloning
-                                  ? 'Synthesizing voice weights...'
-                                  : (_isEnrolled ? 'Re-calibrate Voice' : 'Extract & Clone Voice'),
-                            ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _isEnrolled
-                                  ? AppColors.success
-                                  : AppColors.headerPrimary,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
+                          const SizedBox(height: 16),
+                        ] else if (_recordedAudio == null && !_isEnrolled) ...[
+                          SizedBox(
+                            width: double.infinity,
+                            height: 46,
+                            child: OutlinedButton.icon(
+                              onPressed: _isCloning ? null : _executeVoiceCloning,
+                              icon: const Icon(Icons.auto_awesome_outlined, size: 18),
+                              label: const Text('Or calibrate with studio sample profile'),
+                              style: OutlinedButton.styleFrom(
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
                               ),
                             ),
                           ),
-                        ),
+                        ],
 
                         if (_isCloning) ...[
                           _buildExtractionProgressCard(),

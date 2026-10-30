@@ -28,5 +28,7 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Panchatantra needs microphone access to record and clone your voice for bedtime storytelling.</string>
 </dict>
 </plist>

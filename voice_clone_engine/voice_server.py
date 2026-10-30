@@ -19,8 +19,12 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from voice_cloner import VoiceCloner
 
 # Initialize cloner with persistent voice profiles directory
-PROFILES_DIR = Path("./voice_profiles")
+BASE_DIR = Path(__file__).resolve().parent.parent
+PROFILES_DIR = BASE_DIR / "voice_profiles"
 PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+FLUTTER_AUDIO_ASSET = BASE_DIR / "panchatantra_app" / "assets" / "audio" / "cloned_sample.wav"
+FLUTTER_AUDIO_ASSET.parent.mkdir(parents=True, exist_ok=True)
+
 cloner = VoiceCloner(profiles_dir=str(PROFILES_DIR))
 
 # Pre-load neural models into memory for sub-second responses
@@ -86,9 +90,10 @@ class VoiceRequestHandler(BaseHTTPRequestHandler):
                 parent_name = data.get("parent_name", "Parent")
                 audio_base64 = data.get("audio_base64", "")
                 audio_path = data.get("audio_path", "")
+                file_ext = data.get("file_ext", "wav")
 
                 safe_name = parent_name.replace(" ", "_").lower()
-                sample_file = PROFILES_DIR / f"sample_{safe_name}.wav"
+                sample_file = PROFILES_DIR / f"raw_sample_{safe_name}.{file_ext}"
 
                 if audio_base64:
                     with open(sample_file, "wb") as f:
@@ -103,16 +108,20 @@ class VoiceRequestHandler(BaseHTTPRequestHandler):
                 profile = cloner.enroll_voice(target_sample, parent_name=parent_name)
 
                 # Also automatically generate a preview story narration in this cloned voice!
-                preview_text = f"Hello my sweet little one, tonight we will listen to the clever rabbit and the mighty lion."
-                flutter_asset_out = Path("panchatantra_app/assets/audio/cloned_sample.wav")
-                flutter_asset_out.parent.mkdir(parents=True, exist_ok=True)
-                cloner.synthesize_story(preview_text, str(flutter_asset_out), parent_name=parent_name)
+                preview_text = data.get("preview_text") or f"Hello my sweet little one, tonight we will listen to the clever rabbit and the mighty lion."
+                final_preview = cloner.synthesize_story(preview_text, str(FLUTTER_AUDIO_ASSET), parent_name=parent_name)
+
+                audio_bytes = b""
+                if os.path.exists(final_preview):
+                    with open(final_preview, "rb") as f:
+                        audio_bytes = f.read()
 
                 self._set_headers(200)
                 self.wfile.write(json.dumps({
                     "success": True,
                     "profile": profile,
-                    "preview_url": "assets/audio/cloned_sample.wav"
+                    "preview_url": "assets/audio/cloned_sample.wav",
+                    "preview_audio_base64": base64.b64encode(audio_bytes).decode("utf-8")
                 }).encode("utf-8"))
             except Exception as e:
                 self._set_headers(500)
@@ -123,9 +132,15 @@ class VoiceRequestHandler(BaseHTTPRequestHandler):
                 data = json.loads(body.decode("utf-8"))
                 text = data.get("text", "")
                 parent_name = data.get("parent_name", "Parent")
-                out_path = data.get("output_path", "./voice_profiles/output_narration.wav")
+                out_path_str = data.get("output_path")
+                if out_path_str:
+                    out_path = Path(out_path_str)
+                    if not out_path.is_absolute():
+                        out_path = BASE_DIR / out_path_str
+                else:
+                    out_path = FLUTTER_AUDIO_ASSET
 
-                final_path = cloner.synthesize_story(text, out_path, parent_name=parent_name)
+                final_path = cloner.synthesize_story(text, str(out_path), parent_name=parent_name)
 
                 audio_bytes = b""
                 if os.path.exists(final_path):
@@ -137,7 +152,7 @@ class VoiceRequestHandler(BaseHTTPRequestHandler):
                     "success": True,
                     "audio_base64": base64.b64encode(audio_bytes).decode("utf-8"),
                     "voice": f"{parent_name}'s Real Cloned Voice (SpeechT5)",
-                    "audio_path": final_path,
+                    "audio_path": str(final_path),
                     "size_bytes": len(audio_bytes)
                 }).encode("utf-8"))
             except Exception as e:

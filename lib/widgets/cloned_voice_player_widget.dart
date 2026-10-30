@@ -94,6 +94,8 @@ class _ClonedVoicePlayerWidgetState extends State<ClonedVoicePlayerWidget>
       } else {
         if (_customAudioBytes != null) {
           await _audioPlayer.play(BytesSource(_customAudioBytes!));
+        } else if (widget.initialResult?.audioBytes != null && widget.initialResult!.audioBytes!.isNotEmpty) {
+          await _audioPlayer.play(BytesSource(widget.initialResult!.audioBytes!));
         } else {
           // Play bundled real neural sample
           await _audioPlayer.play(AssetSource('audio/cloned_sample.wav'));
@@ -113,6 +115,8 @@ class _ClonedVoicePlayerWidgetState extends State<ClonedVoicePlayerWidget>
       await _audioPlayer.seek(Duration.zero);
       if (_customAudioBytes != null) {
         await _audioPlayer.play(BytesSource(_customAudioBytes!));
+      } else if (widget.initialResult?.audioBytes != null && widget.initialResult!.audioBytes!.isNotEmpty) {
+        await _audioPlayer.play(BytesSource(widget.initialResult!.audioBytes!));
       } else {
         await _audioPlayer.play(AssetSource('audio/cloned_sample.wav'));
       }
@@ -319,17 +323,51 @@ class _ClonedVoicePlayerWidgetState extends State<ClonedVoicePlayerWidget>
                               children: [
                                 Row(
                                   children: [
-                                    Text(
-                                      _isPlaying ? 'Playing Cloned Voice...' : 'Tap to test parent voice',
-                                      style: GoogleFonts.nunito(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w800,
-                                        color: _isPlaying
-                                            ? AppColors.accentCyanDark
-                                            : AppColors.textDark,
+                                    Expanded(
+                                      child: Text(
+                                        _customAudioBytes != null
+                                            ? (_isPlaying
+                                                ? '🎙️ Speaking Custom Sentence...'
+                                                : '🎧 Custom Sentence Ready')
+                                            : (_isPlaying
+                                                ? '🎙️ Speaking Story Preview...'
+                                                : '🎧 Cloned Voice Ready (Tap Play)'),
+                                        style: GoogleFonts.nunito(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w800,
+                                          color: _isPlaying
+                                              ? AppColors.accentCyanDark
+                                              : AppColors.textDark,
+                                        ),
                                       ),
                                     ),
-                                    const Spacer(),
+                                    if (_customAudioBytes != null) ...[
+                                      GestureDetector(
+                                        onTap: () {
+                                          setState(() {
+                                            _customAudioBytes = null;
+                                            _lastSynthesizedNote = null;
+                                          });
+                                          _replayAudio();
+                                        },
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: AppColors.chipBlue,
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                          child: Text(
+                                            'Story Preview',
+                                            style: GoogleFonts.nunito(
+                                              fontSize: 9.5,
+                                              fontWeight: FontWeight.w800,
+                                              color: AppColors.headerPrimary,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                    ],
                                     IconButton(
                                       icon: const Icon(Icons.replay_rounded, size: 20),
                                       color: AppColors.textMedium,
