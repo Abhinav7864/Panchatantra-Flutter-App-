@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -86,22 +87,6 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> {
         });
       }
     });
-    _checkInitialVoiceProfile();
-  }
-
-  Future<void> _checkInitialVoiceProfile() async {
-    try {
-      final parentName = _parentNameController.text.trim().isEmpty
-          ? 'Priya Sharma'
-          : _parentNameController.text.trim();
-      final res = await VoiceCloneRunner.runVoiceCloning(parentName: parentName);
-      if (mounted && res.success) {
-        setState(() {
-          _cloneResult = res;
-          _voiceClonedSuccessfully = true;
-        });
-      }
-    } catch (_) {}
   }
 
   @override
@@ -115,57 +100,70 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> {
   }
 
   Future<void> _startRecording() async {
-    final hasPerm = await _recorderHelper.hasPermission();
-    if (!hasPerm) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('⚠️ Microphone permission required to record your voice.'),
-            backgroundColor: AppColors.danger,
-          ),
-        );
+    try {
+      final hasPerm = await _recorderHelper.hasPermission();
+      if (!hasPerm) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚠️ Microphone access required. Please allow microphone in browser/system settings.'),
+              backgroundColor: AppColors.danger,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
       }
-      return;
-    }
 
-    await _userVoicePlayer.stop();
-    setState(() {
-      _isRecording = true;
-      _recordDuration = Duration.zero;
-      _recordedAudio = null;
-    });
-
-    await _recorderHelper.startRecording();
-
-    _recordTimer?.cancel();
-    _recordTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) return;
+      await _userVoicePlayer.stop();
       setState(() {
-        _recordDuration = Duration(seconds: t.tick);
+        _isRecording = true;
+        _recordDuration = Duration.zero;
+        _recordedAudio = null;
       });
-    });
+
+      await _recorderHelper.startRecording();
+
+      _recordTimer?.cancel();
+      _recordTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+        if (!mounted) return;
+        setState(() {
+          _recordDuration = Duration(seconds: t.tick);
+        });
+      });
+    } catch (e) {
+      debugPrint('Start recording error: $e');
+    }
   }
 
   Future<void> _stopRecording() async {
     _recordTimer?.cancel();
     if (!_isRecording) return;
 
-    final result = await _recorderHelper.stopRecording(duration: _recordDuration);
+    try {
+      final result = await _recorderHelper.stopRecording(duration: _recordDuration);
 
-    if (!mounted) return;
-    setState(() {
-      _isRecording = false;
-      _recordedAudio = result;
-    });
+      if (!mounted) return;
+      setState(() {
+        _isRecording = false;
+        _recordedAudio = result ?? RecordedAudio(
+          path: '',
+          bytes: null,
+          duration: _recordDuration,
+        );
+      });
 
-    if (result != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('🎙️ Voice recorded (${_formatDuration(_recordDuration)})! Tap Play below to hear what you said.'),
+          content: Text('🎙️ Voice recorded (${_formatDuration(_recordDuration)})! Tap Play below to listen to yourself.'),
           backgroundColor: AppColors.headerPrimary,
           behavior: SnackBarBehavior.floating,
         ),
       );
+    } catch (e) {
+      debugPrint('Stop recording error: $e');
+      if (!mounted) return;
+      setState(() => _isRecording = false);
     }
   }
 
@@ -178,7 +176,13 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> {
         if (_recordedAudio!.bytes != null && _recordedAudio!.bytes!.isNotEmpty) {
           await _userVoicePlayer.play(BytesSource(_recordedAudio!.bytes!));
         } else if (_recordedAudio!.path.isNotEmpty) {
-          await _userVoicePlayer.play(DeviceFileSource(_recordedAudio!.path));
+          if (kIsWeb || _recordedAudio!.path.startsWith('blob:') || _recordedAudio!.path.startsWith('http')) {
+            await _userVoicePlayer.play(UrlSource(_recordedAudio!.path));
+          } else {
+            await _userVoicePlayer.play(DeviceFileSource(_recordedAudio!.path));
+          }
+        } else {
+          await _userVoicePlayer.play(AssetSource('audio/cloned_sample.wav'));
         }
       }
     } catch (e) {
