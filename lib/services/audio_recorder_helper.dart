@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:record/record.dart';
+import 'audio_platform/audio_platform_helper.dart';
 
 class RecordedAudio {
   final String path;
@@ -13,17 +13,19 @@ class RecordedAudio {
     this.bytes,
     this.duration = Duration.zero,
   });
+
+  bool get hasValidAudio => bytes != null && bytes!.length > 500;
 }
 
 class AudioRecorderHelper {
   final AudioRecorder _recorder = AudioRecorder();
-  StreamSubscription<Uint8List>? _streamSub;
-  final List<int> _pcmBuffer = [];
+  String _currentRecordPath = '';
 
   Future<bool> hasPermission() async {
     try {
       return await _recorder.hasPermission();
-    } catch (_) {
+    } catch (e) {
+      debugPrint('hasPermission error: $e');
       return false;
     }
   }
@@ -36,10 +38,21 @@ class AudioRecorderHelper {
     }
   }
 
-  /// Starts recording with dual capture: standard file/blob + in-memory PCM stream
+  Future<Amplitude> getAmplitude() async {
+    try {
+      return await _recorder.getAmplitude();
+    } catch (_) {
+      return Amplitude(current: -160.0, max: -160.0);
+    }
+  }
+
+  /// Starts recording 16kHz mono WAV audio to platform-appropriate destination
   Future<void> startRecording({String? path}) async {
-    _pcmBuffer.clear();
-    await _streamSub?.cancel();
+    final effectivePath = (path != null && path.isNotEmpty)
+        ? path
+        : getPlatformRecordingPath();
+
+    _currentRecordPath = effectivePath;
 
     const config = RecordConfig(
       encoder: AudioEncoder.wav,
@@ -48,110 +61,46 @@ class AudioRecorderHelper {
     );
 
     try {
-      // Start streaming PCM chunks directly into Dart memory (works seamlessly on Web and Native)
-      final stream = await _recorder.startStream(config);
-      _streamSub = stream.listen((chunk) {
-        _pcmBuffer.addAll(chunk);
-      }, onError: (e) {
-        debugPrint('Record stream chunk error: $e');
-      });
+      await _recorder.start(config, path: effectivePath);
+      debugPrint('🎙️ AudioRecorder started recording to: "$effectivePath"');
     } catch (e) {
-      debugPrint('Start stream fallback to file: $e');
-      // If streaming not supported on specific platform, fallback to file path
-      await _recorder.start(config, path: path ?? '');
+      debugPrint('❌ AudioRecorder start error: $e');
+      rethrow;
     }
   }
 
+  /// Stops recording, retrieves audio bytes across platforms, and returns RecordedAudio
   Future<RecordedAudio?> stopRecording({Duration duration = Duration.zero}) async {
     try {
-      await _streamSub?.cancel();
-      final path = await _recorder.stop() ?? '';
+      final returnedPath = await _recorder.stop();
+      final effectivePath = (returnedPath != null && returnedPath.isNotEmpty)
+          ? returnedPath
+          : _currentRecordPath;
 
-      Uint8List? finalWavBytes;
+      debugPrint('🛑 AudioRecorder stopped. Final path: "$effectivePath"');
 
-      // 1. If in-memory stream buffer has data, package with standard WAV header
-      if (_pcmBuffer.isNotEmpty) {
-        final rawPcm = Uint8List.fromList(_pcmBuffer);
-        finalWavBytes = _createWavContainer(rawPcm, 16000, 1);
-      }
+      // Read audio bytes across native file system and browser Blob APIs
+      final bytes = await readPlatformAudioBytes(effectivePath);
 
-      // 2. If native file exists (Desktop / Mobile), read file directly
-      if ((finalWavBytes == null || finalWavBytes.isEmpty) && !kIsWeb && path.isNotEmpty) {
-        try {
-          final file = File(path);
-          if (await file.exists()) {
-            finalWavBytes = await file.readAsBytes();
-          }
-        } catch (_) {}
+      if (bytes != null) {
+        debugPrint('✅ Audio bytes captured successfully: ${bytes.length} bytes');
+      } else {
+        debugPrint('⚠️ No audio bytes retrieved from "$effectivePath"');
       }
 
       return RecordedAudio(
-        path: path,
-        bytes: finalWavBytes,
+        path: effectivePath,
+        bytes: bytes,
         duration: duration,
       );
     } catch (e) {
-      debugPrint('Stop recording error: $e');
+      debugPrint('❌ Stop recording error: $e');
       return null;
     }
   }
 
-  /// Wraps raw 16-bit mono PCM into a standard 44-byte WAV audio container
-  static Uint8List _createWavContainer(Uint8List pcmData, int sampleRate, int numChannels) {
-    // If data already has RIFF/WAV header, return directly
-    if (pcmData.length >= 12 &&
-        pcmData[0] == 0x52 && pcmData[1] == 0x49 && pcmData[2] == 0x46 && pcmData[3] == 0x46) {
-      return pcmData;
-    }
-
-    final byteRate = sampleRate * numChannels * 2;
-    final blockAlign = numChannels * 2;
-    final totalDataLen = pcmData.length;
-    final totalAudioLen = totalDataLen + 36;
-
-    final header = Uint8List(44);
-    final b = ByteData.view(header.buffer);
-
-    // RIFF chunk
-    header[0] = 0x52; // 'R'
-    header[1] = 0x49; // 'I'
-    header[2] = 0x46; // 'F'
-    header[3] = 0x46; // 'F'
-    b.setUint32(4, totalAudioLen, Endian.little);
-    header[8] = 0x57;  // 'W'
-    header[9] = 0x41;  // 'A'
-    header[10] = 0x56; // 'V'
-    header[11] = 0x45; // 'E'
-
-    // fmt subchunk
-    header[12] = 0x66; // 'f'
-    header[13] = 0x6D; // 'm'
-    header[14] = 0x74; // 't'
-    header[15] = 0x20; // ' '
-    b.setUint32(16, 16, Endian.little); // Subchunk1Size
-    b.setUint16(20, 1, Endian.little);  // PCM format
-    b.setUint16(22, numChannels, Endian.little);
-    b.setUint32(24, sampleRate, Endian.little);
-    b.setUint32(28, byteRate, Endian.little);
-    b.setUint16(32, blockAlign, Endian.little);
-    b.setUint16(34, 16, Endian.little); // 16-bit
-
-    // data subchunk
-    header[36] = 0x64; // 'd'
-    header[37] = 0x61; // 'a'
-    header[38] = 0x74; // 't'
-    header[39] = 0x61; // 'a'
-    b.setUint32(40, totalDataLen, Endian.little);
-
-    final out = Uint8List(44 + totalDataLen);
-    out.setRange(0, 44, header);
-    out.setRange(44, 44 + totalDataLen, pcmData);
-    return out;
-  }
-
   Future<void> dispose() async {
     try {
-      await _streamSub?.cancel();
       await _recorder.dispose();
     } catch (_) {}
   }

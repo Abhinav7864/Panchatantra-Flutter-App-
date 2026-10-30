@@ -20,9 +20,14 @@ from voice_cloner import VoiceCloner
 
 # Initialize cloner with persistent voice profiles directory
 BASE_DIR = Path(__file__).resolve().parent.parent
-PROFILES_DIR = BASE_DIR / "voice_profiles"
+if BASE_DIR.name == "panchatantra_app":
+    PROFILES_DIR = BASE_DIR / "voice_profiles"
+    FLUTTER_AUDIO_ASSET = BASE_DIR / "assets" / "audio" / "cloned_sample.wav"
+else:
+    PROFILES_DIR = BASE_DIR / "voice_profiles"
+    FLUTTER_AUDIO_ASSET = BASE_DIR / "panchatantra_app" / "assets" / "audio" / "cloned_sample.wav"
+
 PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-FLUTTER_AUDIO_ASSET = BASE_DIR / "panchatantra_app" / "assets" / "audio" / "cloned_sample.wav"
 FLUTTER_AUDIO_ASSET.parent.mkdir(parents=True, exist_ok=True)
 
 cloner = VoiceCloner(profiles_dir=str(PROFILES_DIR))

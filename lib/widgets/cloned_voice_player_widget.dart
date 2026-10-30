@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:audioplayers/audioplayers.dart';
 import '../theme/app_colors.dart';
 import '../services/voice_clone_runner.dart';
+import '../services/audio_platform/audio_platform_helper.dart';
 
 class ClonedVoicePlayerWidget extends StatefulWidget {
   final String parentName;
@@ -92,35 +93,48 @@ class _ClonedVoicePlayerWidgetState extends State<ClonedVoicePlayerWidget>
       if (_isPlaying) {
         await _audioPlayer.pause();
       } else {
-        if (_customAudioBytes != null) {
-          await _audioPlayer.play(BytesSource(_customAudioBytes!));
-        } else if (widget.initialResult?.audioBytes != null && widget.initialResult!.audioBytes!.isNotEmpty) {
-          await _audioPlayer.play(BytesSource(widget.initialResult!.audioBytes!));
+        Source? source;
+        if (_customAudioBytes != null && _customAudioBytes!.isNotEmpty) {
+          source = await createPlatformAudioSource(bytes: _customAudioBytes);
+        } else if (widget.initialResult?.audioBytes != null &&
+            widget.initialResult!.audioBytes!.isNotEmpty) {
+          source = await createPlatformAudioSource(
+              bytes: widget.initialResult!.audioBytes);
         } else {
-          // Play bundled real neural sample
-          await _audioPlayer.play(AssetSource('audio/cloned_sample.wav'));
+          source = await createPlatformAudioSource(
+              assetFallback: 'audio/cloned_sample.wav');
+        }
+
+        if (source != null) {
+          await _audioPlayer.play(source);
         }
       }
     } catch (e) {
       debugPrint('Audio playback error: $e');
-      // If audio player fails on certain platform, toggle simulated playing state for user experience
-      setState(() {
-        _playerState = _isPlaying ? PlayerState.paused : PlayerState.playing;
-      });
     }
   }
 
   Future<void> _replayAudio() async {
     try {
       await _audioPlayer.seek(Duration.zero);
-      if (_customAudioBytes != null) {
-        await _audioPlayer.play(BytesSource(_customAudioBytes!));
-      } else if (widget.initialResult?.audioBytes != null && widget.initialResult!.audioBytes!.isNotEmpty) {
-        await _audioPlayer.play(BytesSource(widget.initialResult!.audioBytes!));
+      Source? source;
+      if (_customAudioBytes != null && _customAudioBytes!.isNotEmpty) {
+        source = await createPlatformAudioSource(bytes: _customAudioBytes);
+      } else if (widget.initialResult?.audioBytes != null &&
+          widget.initialResult!.audioBytes!.isNotEmpty) {
+        source = await createPlatformAudioSource(
+            bytes: widget.initialResult!.audioBytes);
       } else {
-        await _audioPlayer.play(AssetSource('audio/cloned_sample.wav'));
+        source = await createPlatformAudioSource(
+            assetFallback: 'audio/cloned_sample.wav');
       }
-    } catch (_) {}
+
+      if (source != null) {
+        await _audioPlayer.play(source);
+      }
+    } catch (e) {
+      debugPrint('Replay audio error: $e');
+    }
   }
 
   Future<void> _handleSynthesizeCustomSentence() async {

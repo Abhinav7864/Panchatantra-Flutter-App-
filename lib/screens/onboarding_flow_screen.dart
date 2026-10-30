@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -9,6 +8,7 @@ import '../theme/app_colors.dart';
 import '../providers/app_state.dart';
 import '../services/voice_clone_runner.dart';
 import '../services/audio_recorder_helper.dart';
+import '../services/audio_platform/audio_platform_helper.dart';
 import '../widgets/kid_ui.dart';
 import '../widgets/storybook_illustration.dart';
 import '../widgets/cloned_voice_player_widget.dart';
@@ -36,6 +36,8 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> {
   bool _isRecording = false;
   Duration _recordDuration = Duration.zero;
   Timer? _recordTimer;
+  Timer? _amplitudeTimer;
+  double _micAmplitude = 0.0;
   RecordedAudio? _recordedAudio;
   bool _isPlayingUserRecording = false;
 
@@ -92,6 +94,7 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> {
   @override
   void dispose() {
     _recordTimer?.cancel();
+    _amplitudeTimer?.cancel();
     _recorderHelper.dispose();
     _userVoicePlayer.dispose();
     _parentNameController.dispose();
@@ -104,11 +107,27 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> {
       final hasPerm = await _recorderHelper.hasPermission();
       if (!hasPerm) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('⚠️ Microphone access required. Please allow microphone in browser/system settings.'),
-              backgroundColor: AppColors.danger,
-              behavior: SnackBarBehavior.floating,
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: Row(
+                children: [
+                  const Icon(Icons.mic_off_rounded, color: AppColors.danger),
+                  const SizedBox(width: 8),
+                  Text('Microphone Access Needed', style: GoogleFonts.nunito(fontWeight: FontWeight.w800)),
+                ],
+              ),
+              content: Text(
+                'Panchatantra needs permission to use your MacBook microphone to capture your storytelling voice.\n\nPlease enable Microphone in:\nSystem Settings > Privacy & Security > Microphone.',
+                style: GoogleFonts.nunito(fontSize: 13, height: 1.5),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('OK'),
+                ),
+              ],
             ),
           );
         }
@@ -119,6 +138,7 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> {
       setState(() {
         _isRecording = true;
         _recordDuration = Duration.zero;
+        _micAmplitude = 0.05;
         _recordedAudio = null;
       });
 
@@ -131,39 +151,73 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> {
           _recordDuration = Duration(seconds: t.tick);
         });
       });
+
+      _amplitudeTimer?.cancel();
+      _amplitudeTimer = Timer.periodic(const Duration(milliseconds: 120), (_) async {
+        if (!mounted || !_isRecording) return;
+        try {
+          final amp = await _recorderHelper.getAmplitude();
+          final normalized = ((amp.current + 55.0) / 55.0).clamp(0.08, 1.0);
+          setState(() {
+            _micAmplitude = normalized;
+          });
+        } catch (_) {}
+      });
     } catch (e) {
       debugPrint('Start recording error: $e');
+      if (mounted) {
+        setState(() => _isRecording = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('⚠️ Could not start recording: $e'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
     }
   }
 
   Future<void> _stopRecording() async {
     _recordTimer?.cancel();
+    _amplitudeTimer?.cancel();
     if (!_isRecording) return;
 
     try {
       final result = await _recorderHelper.stopRecording(duration: _recordDuration);
 
       if (!mounted) return;
+      final hasAudio = result != null && result.hasValidAudio;
+
       setState(() {
         _isRecording = false;
-        _recordedAudio = result ?? RecordedAudio(
-          path: '',
-          bytes: null,
-          duration: _recordDuration,
-        );
+        _micAmplitude = 0.0;
+        _recordedAudio = result;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('🎙️ Voice recorded (${_formatDuration(_recordDuration)})! Tap Play below to listen to yourself.'),
-          backgroundColor: AppColors.headerPrimary,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      if (hasAudio) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('🎙️ Voice recorded (${_formatDuration(_recordDuration)}, ${result.bytes!.length} bytes)! Tap Play below to listen to yourself.'),
+            backgroundColor: AppColors.headerPrimary,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('⚠️ Microphone captured no audio bytes. Ensure your MacBook mic is enabled in System Settings > Privacy.'),
+            backgroundColor: AppColors.danger,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     } catch (e) {
       debugPrint('Stop recording error: $e');
       if (!mounted) return;
-      setState(() => _isRecording = false);
+      setState(() {
+        _isRecording = false;
+        _micAmplitude = 0.0;
+      });
     }
   }
 
@@ -173,20 +227,44 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> {
       if (_isPlayingUserRecording) {
         await _userVoicePlayer.pause();
       } else {
-        if (_recordedAudio!.bytes != null && _recordedAudio!.bytes!.isNotEmpty) {
-          await _userVoicePlayer.play(BytesSource(_recordedAudio!.bytes!));
-        } else if (_recordedAudio!.path.isNotEmpty) {
-          if (kIsWeb || _recordedAudio!.path.startsWith('blob:') || _recordedAudio!.path.startsWith('http')) {
-            await _userVoicePlayer.play(UrlSource(_recordedAudio!.path));
-          } else {
-            await _userVoicePlayer.play(DeviceFileSource(_recordedAudio!.path));
-          }
-        } else {
-          await _userVoicePlayer.play(AssetSource('audio/cloned_sample.wav'));
+        if (!_recordedAudio!.hasValidAudio && _recordedAudio!.path.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚠️ No valid audio recorded. Tap the mic to record your voice first!'),
+              backgroundColor: AppColors.danger,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+          return;
+        }
+
+        final source = await createPlatformAudioSource(
+          bytes: _recordedAudio!.bytes,
+          path: _recordedAudio!.path,
+        );
+
+        if (source != null) {
+          await _userVoicePlayer.play(source);
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚠️ Unable to open recorded audio for playback.'),
+              backgroundColor: AppColors.danger,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
         }
       }
     } catch (e) {
       debugPrint('Play user recording error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('⚠️ Playback error: $e'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
     }
   }
 
@@ -779,6 +857,7 @@ class _OnboardingFlowScreenState extends State<OnboardingFlowScreen> {
                 child: _Waveform(
                   active: _isRecording || _isPlayingUserRecording || _isCloning,
                   success: _voiceClonedSuccessfully,
+                  level: _micAmplitude,
                 ),
               ),
               const SizedBox(height: 16),
@@ -1566,8 +1645,13 @@ class _SelectRow extends StatelessWidget {
 class _Waveform extends StatelessWidget {
   final bool active;
   final bool success;
+  final double level;
 
-  const _Waveform({required this.active, required this.success});
+  const _Waveform({
+    required this.active,
+    required this.success,
+    this.level = 0.0,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1576,19 +1660,22 @@ class _Waveform extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: List.generate(24, (index) {
-          final animatedHeight = active
-              ? 9.0 + ((index % 6) * 5.5) * (index.isEven ? 1.15 : 0.78)
-              : 5.0 + (index % 3) * 2;
+          final dynamicHeight = (level > 0.0)
+              ? (8.0 + (level * 32.0) * ((index % 5 + 1) / 3.0)).clamp(6.0, 42.0)
+              : (active
+                  ? 9.0 + ((index % 6) * 5.5) * (index.isEven ? 1.15 : 0.78)
+                  : 5.0 + (index % 3) * 2);
+
           return AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
+            duration: const Duration(milliseconds: 100),
             margin: const EdgeInsets.symmetric(horizontal: 2.4),
             width: 4,
-            height: animatedHeight,
+            height: dynamicHeight,
             decoration: BoxDecoration(
               color: success
                   ? AppColors.success
                   : (active
-                      ? AppColors.accentCyan
+                      ? (level > 0.2 ? AppColors.headerPrimary : AppColors.accentCyan)
                       : AppColors.headerPrimary.withValues(alpha: 0.16)),
               borderRadius: BorderRadius.circular(3),
             ),
