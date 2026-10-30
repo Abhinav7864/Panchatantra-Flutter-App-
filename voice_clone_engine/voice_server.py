@@ -178,9 +178,13 @@ class VoiceRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"error": "Endpoint not found"}).encode("utf-8"))
 
 
+class ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
+
 def run_server(port=8080):
     server_address = ("127.0.0.1", port)
-    httpd = HTTPServer(server_address, VoiceRequestHandler)
+    httpd = ReusableHTTPServer(server_address, VoiceRequestHandler)
     print(f"📡 [VoiceServer] Neural Voice Cloning Server listening on http://127.0.0.1:{port}")
     try:
         httpd.serve_forever()
