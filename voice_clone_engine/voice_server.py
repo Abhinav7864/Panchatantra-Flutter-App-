@@ -77,8 +77,8 @@ class VoiceRequestHandler(BaseHTTPRequestHandler):
             self._set_headers(200)
             self.wfile.write(json.dumps({
                 "status": "healthy",
-                "engine": "Neural-SpeechT5-XVector",
-                "device": cloner.device,
+                "engine": getattr(cloner, "_engine_type", "Neural Voice"),
+                "device": getattr(cloner, "device_desc", cloner.device),
                 "models_loaded": cloner._models_loaded
             }).encode("utf-8"))
         else:
@@ -137,6 +137,7 @@ class VoiceRequestHandler(BaseHTTPRequestHandler):
                 data = json.loads(body.decode("utf-8"))
                 text = data.get("text", "")
                 parent_name = data.get("parent_name", "Parent")
+                language = data.get("language", "en")
                 out_path_str = data.get("output_path")
                 if out_path_str:
                     out_path = Path(out_path_str)
@@ -145,18 +146,19 @@ class VoiceRequestHandler(BaseHTTPRequestHandler):
                 else:
                     out_path = FLUTTER_AUDIO_ASSET
 
-                final_path = cloner.synthesize_story(text, str(out_path), parent_name=parent_name)
+                final_path = cloner.synthesize_story(text, str(out_path), parent_name=parent_name, language=language)
 
                 audio_bytes = b""
                 if os.path.exists(final_path):
                     with open(final_path, "rb") as f:
                         audio_bytes = f.read()
 
+                arch_label = cloner.active_profile.get("model_architecture", "XTTS-v2") if cloner.active_profile else "Neural Voice"
                 self._set_headers(200)
                 self.wfile.write(json.dumps({
                     "success": True,
                     "audio_base64": base64.b64encode(audio_bytes).decode("utf-8"),
-                    "voice": f"{parent_name}'s Real Cloned Voice (SpeechT5)",
+                    "voice": f"{parent_name}'s Cloned Voice ({arch_label})",
                     "audio_path": str(final_path),
                     "size_bytes": len(audio_bytes)
                 }).encode("utf-8"))
