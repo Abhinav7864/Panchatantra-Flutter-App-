@@ -10,6 +10,8 @@ import 'celebration_screen.dart';
 class VideoQuestion {
   final int id;
   final double pauseTimestampSeconds;
+  final double rewindTimestampSeconds;
+  final String sentenceSnippet;
   final String category; // 'Video Recall' or 'Child Development'
   final String prompt;
   final List<String> options;
@@ -20,6 +22,8 @@ class VideoQuestion {
   const VideoQuestion({
     required this.id,
     required this.pauseTimestampSeconds,
+    required this.rewindTimestampSeconds,
+    required this.sentenceSnippet,
     required this.category,
     required this.prompt,
     required this.options,
@@ -32,23 +36,13 @@ class VideoQuestion {
 class VideoStoryScreen extends StatefulWidget {
   const VideoStoryScreen({super.key});
 
-  @override
-  State<VideoStoryScreen> createState() => _VideoStoryScreenState();
-}
-
-class _VideoStoryScreenState extends State<VideoStoryScreen> {
-  late VideoPlayerController _controller;
-  bool _isInitialized = false;
-  VideoQuestion? _activeQuestion;
-  int? _selectedOption;
-  bool _questionAnswered = false;
-  final Set<int> _completedQuestionIds = {};
-
   // 5 Questions: First 2 Video Recall, Last 3 Child Development
   static const List<VideoQuestion> videoQuestions = [
     VideoQuestion(
       id: 1,
       pauseTimestampSeconds: 42.0,
+      rewindTimestampSeconds: 12.0,
+      sentenceSnippet: 'In a dense savanna forest ruled a ferocious king lion, hunting fearlessly every day...',
       category: 'Question 1 of 5 • Video Recall',
       prompt: 'Who is the fierce antagonist terrorizing all the woodland animals in the video?',
       options: [
@@ -63,6 +57,8 @@ class _VideoStoryScreenState extends State<VideoStoryScreen> {
     VideoQuestion(
       id: 2,
       pauseTimestampSeconds: 92.0,
+      rewindTimestampSeconds: 50.0,
+      sentenceSnippet: "When it was the little rabbit's turn, he stood tall with a calm mind and clever plan...",
       category: 'Question 2 of 5 • Video Protagonist',
       prompt: 'Which clever protagonist bravely stepped forward with a calm, smart plan to save the jungle?',
       options: [
@@ -77,6 +73,8 @@ class _VideoStoryScreenState extends State<VideoStoryScreen> {
     VideoQuestion(
       id: 3,
       pauseTimestampSeconds: 142.0,
+      rewindTimestampSeconds: 98.0,
+      sentenceSnippet: 'The little rabbit took deep breaths, remaining calm and respectful even as the lion roared with rage...',
       category: 'Question 3 of 5 • Child Development & Empathy',
       prompt: 'If you were the little rabbit standing before the roaring, angry lion, how would you stay calm and brave?',
       options: [
@@ -91,6 +89,8 @@ class _VideoStoryScreenState extends State<VideoStoryScreen> {
     VideoQuestion(
       id: 4,
       pauseTimestampSeconds: 192.0,
+      rewindTimestampSeconds: 150.0,
+      sentenceSnippet: 'The clever rabbit led the lion to the deep stone well to see his imaginary rival...',
       category: 'Question 4 of 5 • Moral Reasoning Dilemma',
       prompt: 'The rabbit used the lion’s own reflection to trick him into jumping. In Panchatantra Niti, is outsmarting someone justified to protect innocent lives?',
       options: [
@@ -105,6 +105,8 @@ class _VideoStoryScreenState extends State<VideoStoryScreen> {
     VideoQuestion(
       id: 5,
       pauseTimestampSeconds: 230.0,
+      rewindTimestampSeconds: 198.0,
+      sentenceSnippet: 'The entire jungle lived in peace, learning that wisdom and intellect always overcome brute anger...',
       category: 'Question 5 of 5 • Developmental Life Application',
       prompt: 'When you face a difficult challenge in real life (like a tough school lesson or a big fear), what is the best approach?',
       options: [
@@ -117,6 +119,22 @@ class _VideoStoryScreenState extends State<VideoStoryScreen> {
       iksNote: 'This completes your 5-question comprehension and moral reasoning milestone!',
     ),
   ];
+
+  @override
+  State<VideoStoryScreen> createState() => _VideoStoryScreenState();
+}
+
+class _VideoStoryScreenState extends State<VideoStoryScreen> {
+  static const List<VideoQuestion> videoQuestions = VideoStoryScreen.videoQuestions;
+
+  late VideoPlayerController _controller;
+  bool _isInitialized = false;
+  VideoQuestion? _activeQuestion;
+  int? _selectedOption;
+  bool _questionAnswered = false;
+  final Set<int> _completedQuestionIds = {};
+  VideoQuestion? _rewindingQuestion;
+  bool _isSeekingToRewind = false;
 
   @override
   void initState() {
@@ -138,6 +156,8 @@ class _VideoStoryScreenState extends State<VideoStoryScreen> {
   }
 
   void _videoListener() {
+    if (_isSeekingToRewind) return;
+
     if (!_controller.value.isPlaying && _controller.value.position >= _controller.value.duration) {
       // Check if last question needs triggering
       if (!_completedQuestionIds.contains(5) && _activeQuestion == null) {
@@ -147,6 +167,13 @@ class _VideoStoryScreenState extends State<VideoStoryScreen> {
     }
 
     final currentPos = _controller.value.position.inMilliseconds / 1000.0;
+
+    // If currently rewinding to re-watch a clue, wait until we reach the checkpoint again
+    if (_rewindingQuestion != null) {
+      if (currentPos < _rewindingQuestion!.pauseTimestampSeconds - 0.5) {
+        return;
+      }
+    }
 
     for (final q in videoQuestions) {
       if (!_completedQuestionIds.contains(q.id) &&
@@ -162,9 +189,31 @@ class _VideoStoryScreenState extends State<VideoStoryScreen> {
     _controller.pause();
     setState(() {
       _activeQuestion = q;
+      _rewindingQuestion = null;
       _selectedOption = null;
       _questionAnswered = false;
     });
+  }
+
+  Future<void> _rewindToSentence(VideoQuestion q) async {
+    setState(() {
+      _isSeekingToRewind = true;
+      _rewindingQuestion = q;
+      _activeQuestion = null;
+      _selectedOption = null;
+      _questionAnswered = false;
+    });
+
+    await _controller.pause();
+    await _controller.seekTo(
+      Duration(milliseconds: (q.rewindTimestampSeconds * 1000).toInt()),
+    );
+    if (mounted) {
+      setState(() {
+        _isSeekingToRewind = false;
+      });
+      await _controller.play();
+    }
   }
 
   void _resumeVideo() {
@@ -176,6 +225,7 @@ class _VideoStoryScreenState extends State<VideoStoryScreen> {
 
     setState(() {
       _activeQuestion = null;
+      _rewindingQuestion = null;
       _selectedOption = null;
       _questionAnswered = false;
     });
@@ -405,6 +455,116 @@ class _VideoStoryScreenState extends State<VideoStoryScreen> {
             ),
           ),
 
+          // Rewind Scene Clue Banner when re-watching after an incorrect answer
+          if (_rewindingQuestion != null && _activeQuestion == null)
+            Positioned(
+              top: 58,
+              left: 20,
+              right: 20,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF2A1647), Color(0xFF162544)],
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: AppColors.accentCyan.withValues(alpha: 0.65),
+                    width: 1.5,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: AppColors.accentCyan.withValues(alpha: 0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.replay_rounded,
+                        color: AppColors.accentCyan,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                'RE-WATCHING SCENE CLUE',
+                                style: GoogleFonts.nunito(
+                                  color: AppColors.accentCyan,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 10,
+                                  letterSpacing: 0.8,
+                                ),
+                              ),
+                              const SizedBox(width: 5),
+                              const Text('🎧', style: TextStyle(fontSize: 11)),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Listen closely to catch the answer!',
+                            style: GoogleFonts.baloo2(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              height: 1.2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.accentCyan,
+                        foregroundColor: AppColors.textDark,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        elevation: 0,
+                      ),
+                      onPressed: () {
+                        final q = _rewindingQuestion!;
+                        _controller.seekTo(
+                          Duration(
+                            milliseconds:
+                                (q.pauseTimestampSeconds * 1000).toInt(),
+                          ),
+                        );
+                        _triggerQuestion(q);
+                      },
+                      child: Text(
+                        'Ready! ❯',
+                        style: GoogleFonts.nunito(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
           // Play / Pause Overlay Control if no question is active
           if (_activeQuestion == null && _isInitialized)
             Positioned(
@@ -573,6 +733,7 @@ class _VideoStoryScreenState extends State<VideoStoryScreen> {
                   ...List.generate(q.options.length, (idx) {
                     final isSelected = _selectedOption == idx;
                     final isCorrect = idx == q.correctIndex;
+                    final answeredCorrectly = _selectedOption == q.correctIndex;
 
                     Color background = AppColors.background;
                     Color border = Colors.transparent;
@@ -581,13 +742,13 @@ class _VideoStoryScreenState extends State<VideoStoryScreen> {
                     Color badgeText = AppColors.headerPrimary;
 
                     if (_questionAnswered) {
-                      if (isCorrect) {
+                      if (answeredCorrectly && isCorrect) {
                         background = AppColors.chipGreen;
                         border = AppColors.success.withValues(alpha: 0.35);
                         textColor = const Color(0xFF22663C);
                         badgeColor = AppColors.success;
                         badgeText = Colors.white;
-                      } else if (isSelected) {
+                      } else if (isSelected && !isCorrect) {
                         background = AppColors.chipRose;
                         border = AppColors.danger.withValues(alpha: 0.3);
                         textColor = const Color(0xFFA13E3E);
@@ -655,7 +816,7 @@ class _VideoStoryScreenState extends State<VideoStoryScreen> {
                                   ),
                                 ),
                               ),
-                              if (_questionAnswered && isCorrect)
+                              if (_questionAnswered && answeredCorrectly && isCorrect)
                                 const Icon(
                                   Icons.check_circle_rounded,
                                   color: AppColors.success,
@@ -675,31 +836,151 @@ class _VideoStoryScreenState extends State<VideoStoryScreen> {
                   }),
                   if (_questionAnswered) ...[
                     const SizedBox(height: 5),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: AppColors.chipGreen,
-                        borderRadius: BorderRadius.circular(15),
-                      ),
-                      child: Text(
-                        '💡 ${q.explanation}\n🌿 ${q.iksNote}',
-                        style: GoogleFonts.nunito(
-                          fontSize: 10.5,
-                          color: const Color(0xFF245C3D),
-                          height: 1.45,
-                          fontWeight: FontWeight.w700,
+                    if (_selectedOption == q.correctIndex) ...[
+                      // Correct answer feedback
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.chipGreen,
+                          borderRadius: BorderRadius.circular(15),
+                        ),
+                        child: Text(
+                          '💡 ${q.explanation}\n🌿 ${q.iksNote}',
+                          style: GoogleFonts.nunito(
+                            fontSize: 10.5,
+                            color: const Color(0xFF245C3D),
+                            height: 1.45,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 14),
-                    PrimaryCta(
-                      label: _completedQuestionIds.length >= 4
-                          ? 'Finish & see my rewards'
-                          : 'Keep watching',
-                      icon: Icons.play_arrow_rounded,
-                      height: 50,
-                      onPressed: _resumeVideo,
-                    ),
+                      const SizedBox(height: 14),
+                      PrimaryCta(
+                        label: _completedQuestionIds.length >= 4
+                            ? 'Finish & see my rewards'
+                            : 'Keep watching',
+                        icon: Icons.play_arrow_rounded,
+                        height: 50,
+                        onPressed: _resumeVideo,
+                      ),
+                    ] else ...[
+                      // Incorrect answer: Pedagogical encouragement & Rewind CTA
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF4F2),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: AppColors.danger.withValues(alpha: 0.25),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(5),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.danger.withValues(alpha: 0.15),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(
+                                    Icons.replay_rounded,
+                                    color: AppColors.danger,
+                                    size: 15,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  "Not quite! Let's re-watch 🎬",
+                                  style: GoogleFonts.baloo2(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    color: const Color(0xFFA13E3E),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              "Don't worry! Let's start the video again from this scene so you can hear the story clue and try again.",
+                              style: GoogleFonts.nunito(
+                                fontSize: 11,
+                                color: const Color(0xFF7A3333),
+                                height: 1.35,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: const Color(0xFFF3C7C7),
+                                ),
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text('🗣️', style: TextStyle(fontSize: 13)),
+                                  const SizedBox(width: 7),
+                                  Expanded(
+                                    child: Text(
+                                      'Story Sentence: "${q.sentenceSnippet}"',
+                                      style: GoogleFonts.nunito(
+                                        fontSize: 10.5,
+                                        fontStyle: FontStyle.italic,
+                                        fontWeight: FontWeight.w700,
+                                        color: const Color(0xFF4A2B2B),
+                                        height: 1.35,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      PrimaryCta(
+                        label: 'Re-watch from this sentence ↺',
+                        icon: Icons.replay_rounded,
+                        height: 50,
+                        onPressed: () => _rewindToSentence(q),
+                      ),
+                      const SizedBox(height: 6),
+                      Center(
+                        child: TextButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              _selectedOption = null;
+                              _questionAnswered = false;
+                            });
+                          },
+                          icon: const Icon(
+                            Icons.refresh_rounded,
+                            size: 15,
+                            color: AppColors.headerPrimary,
+                          ),
+                          label: Text(
+                            'Try another answer now',
+                            style: GoogleFonts.nunito(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.headerPrimary,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ],
               ),
