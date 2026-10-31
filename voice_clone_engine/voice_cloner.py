@@ -14,6 +14,12 @@ Provides authentic zero-shot voice cloning from a parent's voice recording:
 
 import os
 import sys
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 import types
 import wave
 import json
@@ -43,9 +49,21 @@ try:
     import numpy as np
     from scipy import signal
     NEURAL_AVAILABLE = True
+
+    # PyTorch 2.6+ defaults weights_only=True which breaks loading XTTS-v2 checkpoint objects.
+    # Safe patch to restore weights_only=False for trusted local models:
+    _orig_torch_load = torch.load
+    def _compat_torch_load(*args, **kwargs):
+        if "weights_only" not in kwargs:
+            kwargs["weights_only"] = False
+        return _orig_torch_load(*args, **kwargs)
+    torch.load = _compat_torch_load
 except ImportError as e:
     NEURAL_AVAILABLE = False
     print(f"⚠️ [VoiceCloner] PyTorch/soundfile not fully loaded ({e}), using acoustic fallback.")
+
+# Ensure Coqui Terms of Service agreement is set non-interactively
+os.environ["COQUI_TOS_AGREED"] = "1"
 
 # Check Coqui XTTS-v2 (Gold Standard for Realistic Zero-Shot Voice Cloning)
 try:
@@ -197,15 +215,20 @@ class VoiceCloner:
             try:
                 subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             except Exception:
-                # If ffmpeg is not in PATH, use soundfile directly
+                # If ffmpeg is not in PATH, use librosa / soundfile directly
                 if NEURAL_AVAILABLE:
                     try:
-                        data, in_sr = sf.read(str(audio_file))
-                        if data.ndim > 1:
-                            data = data.mean(axis=1)
+                        import librosa
+                        data, in_sr = librosa.load(str(audio_file), sr=int(target_sr), mono=True)
                         sf.write(str(clean_wav), data, samplerate=int(target_sr))
-                    except Exception as e:
-                        print(f"⚠️ [VoiceCloner] Sample conversion note: {e}")
+                    except Exception:
+                        try:
+                            data, in_sr = sf.read(str(audio_file))
+                            if data.ndim > 1:
+                                data = data.mean(axis=1)
+                            sf.write(str(clean_wav), data, samplerate=int(target_sr))
+                        except Exception as e:
+                            print(f"⚠️ [VoiceCloner] Sample conversion note: {e}")
 
         print(f"🎙️ [VoiceCloner] Enrolling voice profile for: {parent_name}...")
 

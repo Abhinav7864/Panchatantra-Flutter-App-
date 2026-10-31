@@ -102,6 +102,7 @@ class _ClonedVoicePlayerWidgetState extends State<ClonedVoicePlayerWidget>
               bytes: widget.initialResult!.audioBytes);
         } else {
           source = await createPlatformAudioSource(
+              path: 'assets/audio/cloned_sample.wav',
               assetFallback: 'audio/cloned_sample.wav');
         }
 
@@ -127,6 +128,7 @@ class _ClonedVoicePlayerWidgetState extends State<ClonedVoicePlayerWidget>
             bytes: widget.initialResult!.audioBytes);
       } else {
         source = await createPlatformAudioSource(
+            path: 'assets/audio/cloned_sample.wav',
             assetFallback: 'audio/cloned_sample.wav');
       }
 

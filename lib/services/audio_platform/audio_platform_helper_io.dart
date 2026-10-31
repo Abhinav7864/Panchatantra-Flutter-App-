@@ -121,9 +121,13 @@ Future<Source?> createPlatformAudioSource({
   String? assetFallback,
 }) async {
   try {
-    // 1. If we have raw bytes, write to a temp file and play via DeviceFileSource
-    // to bypass DarwinAudioError (setSourceBytes is not implemented on iOS / macOS).
+    // 1. If we have raw bytes:
+    // On Windows, use BytesSource directly (uses SHCreateMemStream in memory, immune to file locks & spaces in paths).
+    // On macOS / iOS, write to temp file and use DeviceFileSource to bypass DarwinAudioError.
     if (bytes != null && bytes.isNotEmpty) {
+      if (Platform.isWindows) {
+        return BytesSource(bytes);
+      }
       final tempDir = Directory.systemTemp;
       final tempFile = File(
           '${tempDir.path}/play_cache_${DateTime.now().millisecondsSinceEpoch}.wav');
@@ -131,13 +135,19 @@ Future<Source?> createPlatformAudioSource({
       return DeviceFileSource(tempFile.path);
     }
 
-    // 2. If a local file path exists, use DeviceFileSource
+    // 2. If a local file path exists
     if (path != null && path.isNotEmpty) {
       if (path.startsWith('http://') || path.startsWith('https://')) {
         return UrlSource(path);
       }
       final file = File(path);
       if (await file.exists()) {
+        if (Platform.isWindows) {
+          final fileBytes = await file.readAsBytes();
+          if (fileBytes.isNotEmpty) {
+            return BytesSource(fileBytes);
+          }
+        }
         return DeviceFileSource(path);
       }
     }

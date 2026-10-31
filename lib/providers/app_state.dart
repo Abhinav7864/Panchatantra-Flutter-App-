@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:audioplayers/audioplayers.dart';
+import '../services/audio_platform/audio_platform_helper.dart';
 import '../models/learner_profile.dart';
 import '../models/voice_profile.dart';
 import '../models/story_model.dart';
@@ -86,8 +87,14 @@ class AppState extends ChangeNotifier {
       if (_isPlaying) {
         await _audioPlayer.pause();
       } else {
-        await _audioPlayer.play(AssetSource('audio/cloned_sample.wav'));
-        await _audioPlayer.setPlaybackRate(_playbackSpeed);
+        final source = await createPlatformAudioSource(
+          path: 'assets/audio/cloned_sample.wav',
+          assetFallback: 'audio/cloned_sample.wav',
+        );
+        if (source != null) {
+          await _audioPlayer.play(source);
+          await _audioPlayer.setPlaybackRate(_playbackSpeed);
+        }
       }
     } catch (e) {
       debugPrint('Audio playback error: $e');
@@ -149,7 +156,12 @@ class AppState extends ChangeNotifier {
   }
 
   // Parent Voice Lifecycle
-  void enrollParentVoice({required String parentName, required double sampleDuration}) {
+  void enrollParentVoice({
+    required String parentName,
+    required double sampleDuration,
+    String? voiceId,
+    String? provider,
+  }) {
     _voiceProfile = _voiceProfile.copyWith(
       isEnrolled: true,
       parentName: parentName,
@@ -157,6 +169,8 @@ class AppState extends ChangeNotifier {
       consentTimestamp: DateTime.now(),
       sampleLengthSeconds: sampleDuration,
       isAIActive: true,
+      voiceId: voiceId,
+      provider: provider ?? 'Inworld AI Realtime Cloud Voice',
     );
     _useParentVoice = true;
     notifyListeners();

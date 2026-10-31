@@ -11,6 +11,13 @@ Provides fast HTTP REST endpoints for the Flutter mobile & desktop application:
 """
 
 import os
+import sys
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 import json
 import base64
 import argparse
@@ -20,15 +27,13 @@ from voice_cloner import VoiceCloner
 
 # Initialize cloner with persistent voice profiles directory
 BASE_DIR = Path(__file__).resolve().parent.parent
-if BASE_DIR.name == "panchatantra_app":
-    PROFILES_DIR = BASE_DIR / "voice_profiles"
-    FLUTTER_AUDIO_ASSET = BASE_DIR / "assets" / "audio" / "cloned_sample.wav"
-else:
-    PROFILES_DIR = BASE_DIR / "voice_profiles"
-    FLUTTER_AUDIO_ASSET = BASE_DIR / "panchatantra_app" / "assets" / "audio" / "cloned_sample.wav"
+PROFILES_DIR = BASE_DIR / "voice_profiles"
+FLUTTER_AUDIO_ASSET = BASE_DIR / "assets" / "audio" / "cloned_sample.wav"
+ALT_AUDIO_ASSET = BASE_DIR / "panchatantra_app" / "assets" / "audio" / "cloned_sample.wav"
 
 PROFILES_DIR.mkdir(parents=True, exist_ok=True)
 FLUTTER_AUDIO_ASSET.parent.mkdir(parents=True, exist_ok=True)
+ALT_AUDIO_ASSET.parent.mkdir(parents=True, exist_ok=True)
 
 cloner = VoiceCloner(profiles_dir=str(PROFILES_DIR))
 
@@ -115,6 +120,11 @@ class VoiceRequestHandler(BaseHTTPRequestHandler):
                 # Also automatically generate a preview story narration in this cloned voice!
                 preview_text = data.get("preview_text") or f"Hello my sweet little one, tonight we will listen to the clever rabbit and the mighty lion."
                 final_preview = cloner.synthesize_story(preview_text, str(FLUTTER_AUDIO_ASSET), parent_name=parent_name)
+                try:
+                    import shutil
+                    shutil.copy2(str(FLUTTER_AUDIO_ASSET), str(ALT_AUDIO_ASSET))
+                except Exception:
+                    pass
 
                 audio_bytes = b""
                 if os.path.exists(final_preview):
@@ -146,7 +156,56 @@ class VoiceRequestHandler(BaseHTTPRequestHandler):
                 else:
                     out_path = FLUTTER_AUDIO_ASSET
 
+                cloud_cfg_file = PROFILES_DIR / "cloud_api_config.json"
+                if cloud_cfg_file.exists():
+                    try:
+                        with open(cloud_cfg_file) as f:
+                            cfg = json.load(f)
+                        if cfg.get("isEnabled") and cfg.get("apiKey") and cfg.get("voiceId"):
+                            import requests
+                            api_key = cfg["apiKey"]
+                            auth_header = api_key if api_key.lower().startswith("basic ") else f"Basic {api_key}"
+                            res = requests.post(
+                                "https://api.inworld.ai/tts/v1/voice",
+                                headers={"Authorization": auth_header, "Content-Type": "application/json"},
+                                json={
+                                    "text": text,
+                                    "voiceId": cfg["voiceId"],
+                                    "modelId": "inworld-tts-2",
+                                    "audioConfig": {"audioEncoding": "MP3", "sampleRateHertz": 24000}
+                                },
+                                timeout=30
+                            )
+                            if res.status_code == 200:
+                                b64_audio = res.json().get("audioContent", "")
+                                if b64_audio:
+                                    audio_bytes = base64.b64decode(b64_audio)
+                                    out_path.write_bytes(audio_bytes)
+                                    if FLUTTER_AUDIO_ASSET.resolve() != out_path.resolve():
+                                        FLUTTER_AUDIO_ASSET.write_bytes(audio_bytes)
+                                    if ALT_AUDIO_ASSET.parent.exists():
+                                        ALT_AUDIO_ASSET.write_bytes(audio_bytes)
+                                    self._set_headers(200)
+                                    self.wfile.write(json.dumps({
+                                        "success": True,
+                                        "audio_base64": b64_audio,
+                                        "voice": f"{parent_name}'s Cloned Voice (Inworld AI Realtime TTS-2)",
+                                        "audio_path": str(out_path),
+                                        "size_bytes": len(audio_bytes)
+                                    }).encode("utf-8"))
+                                    return
+                    except Exception as ce:
+                        print(f"⚠️ [VoiceServer] Cloud TTS fallback error: {ce}")
+
                 final_path = cloner.synthesize_story(text, str(out_path), parent_name=parent_name, language=language)
+                try:
+                    import shutil
+                    if Path(final_path).resolve() != ALT_AUDIO_ASSET.resolve():
+                        shutil.copy2(str(final_path), str(ALT_AUDIO_ASSET))
+                    if Path(final_path).resolve() != FLUTTER_AUDIO_ASSET.resolve():
+                        shutil.copy2(str(final_path), str(FLUTTER_AUDIO_ASSET))
+                except Exception:
+                    pass
 
                 audio_bytes = b""
                 if os.path.exists(final_path):

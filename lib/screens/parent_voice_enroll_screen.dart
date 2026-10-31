@@ -9,7 +9,10 @@ import '../widgets/kid_ui.dart';
 import '../widgets/cloned_voice_player_widget.dart';
 import '../services/voice_clone_runner.dart';
 import '../services/audio_recorder_helper.dart';
+import '../services/audio_file_picker_service.dart';
 import '../services/audio_platform/audio_platform_helper.dart';
+import '../widgets/cloud_api_key_modal.dart';
+import '../services/cloud_voice_service.dart';
 import 'child_profile_screen.dart';
 
 class ParentVoiceEnrollScreen extends StatefulWidget {
@@ -250,6 +253,174 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
     return '$minutes:$seconds';
   }
 
+  Future<void> _openAudioFilePicker() async {
+    await _userVoicePlayer.stop();
+
+    // Look for recent recordings in Downloads / Temp
+    final recentFiles = await AudioFilePickerService.getRecentAudioRecordings();
+
+    if (!mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          padding: EdgeInsets.fromLTRB(22, 20, 22, MediaQuery.of(ctx).viewInsets.bottom + 26),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 4.5,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.chipBlue,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Icon(Icons.audio_file_rounded, color: AppColors.headerPrimary, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Add Voice Recording',
+                          style: GoogleFonts.baloo2(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textDark,
+                          ),
+                        ),
+                        Text(
+                          'Upload an MP3 or WAV (20–30 seconds ideal)',
+                          style: GoogleFonts.nunito(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textMedium,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    final pickedPath = await AudioFilePickerService.pickAudioFile();
+                    if (pickedPath != null && mounted) {
+                      await _loadSelectedAudio(pickedPath);
+                    }
+                  },
+                  icon: const Icon(Icons.folder_open_rounded, size: 20),
+                  label: Text(
+                    'Browse Computer for Audio File...',
+                    style: GoogleFonts.nunito(fontSize: 13, fontWeight: FontWeight.w900),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.headerPrimary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                ),
+              ),
+              if (recentFiles.isNotEmpty) ...[
+                const SizedBox(height: 18),
+                Text(
+                  'Recent Voice Recordings found on your PC:',
+                  style: GoogleFonts.nunito(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textDark,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 200),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: recentFiles.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 6),
+                    itemBuilder: (context, i) {
+                      final file = recentFiles[i];
+                      final name = file.uri.pathSegments.last;
+                      final sizeMb = (file.lengthSync() / (1024 * 1024)).toStringAsFixed(1);
+                      return ListTile(
+                        dense: true,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: BorderSide(color: Colors.grey.shade200),
+                        ),
+                        tileColor: const Color(0xFFF8FAFC),
+                        leading: const Icon(Icons.mic_none_rounded, color: AppColors.headerPrimary, size: 20),
+                        title: Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.nunito(fontSize: 12, fontWeight: FontWeight.w800),
+                        ),
+                        subtitle: Text('$sizeMb MB • ${file.path.split('.').last.toUpperCase()}',
+                            style: GoogleFonts.nunito(fontSize: 10, color: AppColors.textLight)),
+                        trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 13, color: AppColors.headerPrimary),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          await _loadSelectedAudio(file.path);
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _loadSelectedAudio(String filePath) async {
+    final loaded = await AudioFilePickerService.loadAudioFile(filePath);
+    if (!mounted || loaded == null) return;
+
+    setState(() {
+      _recordedAudio = loaded;
+      _recordDuration = loaded.duration;
+      _isRecording = false;
+      _micAmplitude = 0.0;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('🎙️ Loaded "${loaded.inputDeviceName ?? "Voice Sample"}" (${_formatDuration(loaded.duration)})! Tap Play to listen.'),
+        backgroundColor: AppColors.headerPrimary,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   Future<void> _executeVoiceCloning() async {
     setState(() {
       _isCloning = true;
@@ -260,21 +431,25 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
         ? 'Priya Sharma'
         : _nameController.text.trim();
 
-    // Stage 1: Audio Normalization & VAD
-    await Future.delayed(const Duration(milliseconds: 350));
+    final audioPath = _recordedAudio?.path ?? '';
+    final ext = audioPath.contains('.') ? audioPath.split('.').last.toLowerCase() : 'wav';
+
+    // Stage 1: Audio Normalization & 24kHz Conversion
+    await Future.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
     setState(() => _cloningStage = 2);
 
-    // Stage 2: SpeechBrain 512-D neural X-Vector extraction
+    // Stage 2: Coqui XTTS-v2 Latent Diffusion Conditioning
     await Future.delayed(const Duration(milliseconds: 350));
     if (!mounted) return;
     setState(() => _cloningStage = 3);
 
-    // Stage 3 & 4: Neural extraction & SpeechT5 transformer synthesis
+    // Stage 3 & 4: Neural extraction & CUDA acceleration
     final result = await VoiceCloneRunner.runVoiceCloning(
       parentName: parentName,
       audioBytes: _recordedAudio?.bytes,
       audioSamplePath: _recordedAudio?.path,
+      fileExt: ext,
     );
 
     if (!mounted) return;
@@ -295,6 +470,7 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
             sampleDuration: _recordDuration.inSeconds > 0
                 ? _recordDuration.inSeconds.toDouble()
                 : 30.0,
+            voiceId: result.voiceId,
           );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -318,10 +494,10 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
 
   Widget _buildExtractionProgressCard() {
     final stages = [
-      (1, 'Audio Normalization & VAD', '16kHz mono conversion & background noise filtering'),
-      (2, 'Neural Embedding Extraction', 'SpeechBrain 512-D X-Vector speaker space projection'),
-      (3, 'Acoustic Timbre Analysis', 'Fundamental pitch (F0: 115.9 Hz) & resonance mapping'),
-      (4, 'Transformer Model Synthesis', 'Microsoft SpeechT5 + HiFi-GAN neural vocoder weights'),
+      (1, 'Audio Normalization & Resampling', '24kHz studio conversion & acoustic silence trimming'),
+      (2, 'Neural Latent Diffusion Conditioning', 'Coqui XTTS-v2 zero-shot cross-attention alignment'),
+      (3, 'Vocal Timbre & Prosody Analysis', 'Fundamental pitch & native accent formant extraction'),
+      (4, 'Hardware Acceleration on RTX 4070', 'NVIDIA GeForce RTX 4070 CUDA FP16 Tensor Cores'),
     ];
 
     return Container(
@@ -585,6 +761,120 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
                       ],
                     ),
                   ),
+                  const SizedBox(height: 14),
+
+                  FutureBuilder<CloudVoiceConfig>(
+                    future: CloudVoiceService.loadConfig(),
+                    builder: (context, snapshot) {
+                      final config = snapshot.data;
+                      final isConnected = config != null && config.isValid && config.isEnabled;
+                      final voiceLabel = config?.voiceDisplayName.isNotEmpty == true
+                          ? config!.voiceDisplayName
+                          : (config?.voiceId.isNotEmpty == true ? config!.voiceId : 'Not connected');
+
+                      return Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: isConnected
+                                ? const [Color(0xFFF0FDF4), Color(0xFFDCFCE7)]
+                                : const [Color(0xFFEFF6FF), Color(0xFFDBEAFE)],
+                          ),
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: isConnected ? const Color(0xFF86EFAC) : const Color(0xFF93C5FD),
+                            width: 1.2,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: isConnected ? AppColors.success : const Color(0xFF2563EB),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Icon(
+                                isConnected ? Icons.verified_rounded : Icons.cloud_sync_rounded,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Text(
+                                        isConnected ? 'Inworld AI Cloud Mode Active' : 'Use Inworld AI API',
+                                        style: GoogleFonts.nunito(
+                                          fontSize: 12.5,
+                                          fontWeight: FontWeight.w900,
+                                          color: isConnected ? const Color(0xFF14532D) : const Color(0xFF1E3A8A),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                                        decoration: BoxDecoration(
+                                          color: isConnected ? const Color(0xFF16A34A) : const Color(0xFF2563EB),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          isConnected ? 'CONNECTED' : 'API KEY',
+                                          style: GoogleFonts.nunito(
+                                            fontSize: 8.5,
+                                            fontWeight: FontWeight.w900,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Text(
+                                    isConnected
+                                        ? 'Using: $voiceLabel (Realtime TTS-2)'
+                                        : 'Photorealistic voice cloning & Realtime TTS-2 cloud synthesis',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: GoogleFonts.nunito(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                      color: isConnected ? const Color(0xFF166534) : const Color(0xFF3B82F6),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                CloudApiKeyModal.show(context, onConfigSaved: () {
+                                  setState(() {});
+                                });
+                              },
+                              style: TextButton.styleFrom(
+                                backgroundColor: Colors.white,
+                                foregroundColor: isConnected ? const Color(0xFF16A34A) : const Color(0xFF2563EB),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                elevation: 1,
+                              ),
+                              child: Text(
+                                isConnected ? 'Change Key' : 'Enter API Key',
+                                style: GoogleFonts.nunito(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
                   const SizedBox(height: 18),
 
                   KidCard(
@@ -612,21 +902,50 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
                           ),
                         ),
                         const SizedBox(height: 20),
-                        Text(
-                          'Read this little passage aloud',
-                          style: GoogleFonts.baloo2(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.textDark,
-                          ),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Text(
+                              'Read this bedtime story aloud',
+                              style: GoogleFonts.baloo2(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textDark,
+                              ),
+                            ),
+                            const Spacer(),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFEF3C7),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: const Color(0xFFFCD34D)),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.timer_outlined, size: 14, color: Color(0xFFB45309)),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '30s Target',
+                                    style: GoogleFonts.nunito(
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w900,
+                                      color: const Color(0xFFB45309),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          'Read naturally, like you are tucking your child into bed.',
+                          'For photorealistic cloning, record for ~30 seconds with a warm, calm bedtime tone.',
                           style: GoogleFonts.nunito(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textLight,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textMedium,
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -638,9 +957,9 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
                             borderRadius: BorderRadius.circular(20),
                           ),
                           child: Text(
-                            '“Once upon a time, in a lush green forest by a shimmering lake, lived a wise little rabbit who showed us that calm wit can defeat brute power...”',
+                            '“Once upon a time, in a peaceful green valley by a shimmering lake, there lived a wise little rabbit and a mighty lion. Every evening as the golden sun sank behind the purple mountains, the gentle creatures would gather beneath the ancient banyan tree to share tales of courage, kindness, and wonder. Tonight, close your eyes, my dear little one, as we embark on a magical journey into the stars together.”',
                             style: GoogleFonts.nunito(
-                              fontSize: 13.5,
+                              fontSize: 13,
                               height: 1.6,
                               fontWeight: FontWeight.w700,
                               fontStyle: FontStyle.italic,
@@ -710,19 +1029,109 @@ class _ParentVoiceEnrollScreenState extends State<ParentVoiceEnrollScreen> {
                                   ],
                                 ),
                               ),
-                              const SizedBox(height: 10),
-                              Text(
-                                _isRecording
-                                    ? 'Recording... ${_formatDuration(_recordDuration)} (Tap to Stop)'
-                                    : (_recordedAudio != null
-                                        ? 'Sample captured (${_formatDuration(_recordDuration)})! Listen below.'
-                                        : 'Tap mic to record your voice'),
-                                style: GoogleFonts.nunito(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 13,
-                                  color: _isRecording ? AppColors.danger : AppColors.textMedium,
+                              if (_isRecording) ...[
+                                const SizedBox(height: 14),
+                                Container(
+                                  width: 240,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey.shade200,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: LinearProgressIndicator(
+                                      value: (_recordDuration.inSeconds / 30.0).clamp(0.0, 1.0),
+                                      backgroundColor: Colors.transparent,
+                                      valueColor: AlwaysStoppedAnimation(
+                                        _recordDuration.inSeconds >= 30
+                                            ? AppColors.success
+                                            : (_recordDuration.inSeconds >= 15
+                                                ? AppColors.headerPrimary
+                                                : const Color(0xFFF59E0B)),
+                                      ),
+                                    ),
+                                  ),
                                 ),
-                              ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  '${_formatDuration(_recordDuration)} / 00:30 (${((_recordDuration.inSeconds / 30.0) * 100).toInt().clamp(0, 100)}%)',
+                                  style: GoogleFonts.nunito(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w900,
+                                    color: _recordDuration.inSeconds >= 30
+                                        ? AppColors.success
+                                        : AppColors.textDark,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  _recordDuration.inSeconds >= 30
+                                      ? '✨ Ideal 30s captured! Tap Stop when finished.'
+                                      : (_recordDuration.inSeconds >= 15
+                                          ? 'Great pace! Almost at 30 seconds...'
+                                          : 'Reading passage... (~30s needed for best clone)'),
+                                  style: GoogleFonts.nunito(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: _recordDuration.inSeconds >= 30
+                                        ? AppColors.success
+                                        : AppColors.textMedium,
+                                  ),
+                                ),
+                              ] else ...[
+                                const SizedBox(height: 10),
+                                Text(
+                                  _recordedAudio != null
+                                      ? 'Voice sample ready (${_formatDuration(_recordDuration)})! Listen below.'
+                                      : 'Tap mic to record for 30 seconds',
+                                  style: GoogleFonts.nunito(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 13,
+                                    color: AppColors.textMedium,
+                                  ),
+                                ),
+                              ],
+                              if (!_isRecording && !_isCloning) ...[
+                                const SizedBox(height: 16),
+                                Row(
+                                  children: [
+                                    Expanded(child: Divider(color: Colors.grey.shade300, thickness: 1)),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                                      child: Text(
+                                        'OR',
+                                        style: GoogleFonts.nunito(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w800,
+                                          color: AppColors.textLight,
+                                        ),
+                                      ),
+                                    ),
+                                    Expanded(child: Divider(color: Colors.grey.shade300, thickness: 1)),
+                                  ],
+                                ),
+                                const SizedBox(height: 14),
+                                OutlinedButton.icon(
+                                  onPressed: _openAudioFilePicker,
+                                  icon: const Icon(Icons.upload_file_rounded, size: 19),
+                                  label: Text(
+                                    'Add / Upload Voice Recording (MP3 / WAV)',
+                                    style: GoogleFonts.nunito(
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: AppColors.headerPrimary,
+                                    side: const BorderSide(color: AppColors.headerPrimary, width: 1.5),
+                                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         ),
